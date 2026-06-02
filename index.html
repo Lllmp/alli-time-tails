@@ -80,6 +80,12 @@
   @keyframes starpop{0%{transform:scale(1)}40%{transform:scale(1.25)}100%{transform:scale(1)}}
   .opts-wide{grid-template-columns:1fr;}
   .opts-wide .opt{font-size:19px;padding:18px;min-height:auto;}
+  .dualclock{display:flex;align-items:center;justify-content:center;gap:6px;margin:6px 0 16px;}
+  .miniclock{text-align:center;}
+  .cklabel{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--muted);margin-bottom:2px;}
+  .cktime{font-family:var(--font-display);font-weight:700;font-size:18px;color:var(--ink);margin-top:2px;}
+  .ckarrow{font-size:28px;}
+  .sweepbox{display:flex;flex-direction:column;align-items:center;margin-top:12px;background:#fff;border-radius:16px;padding:10px;}
   .h-row{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:14px;}
   .swatch{width:30px;height:30px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #e6eef4;cursor:pointer;}
 </style>
@@ -130,6 +136,9 @@ const MIS={
  M4:{lead:"You found the right hand!",teach:"Each step is 5 minutes, not 1. Count by 5s with me."},
  M5:{lead:"Look closely!",teach:"The short hand has almost reached the next number — but not yet. The minutes tell us we're near the end of this hour."},
  M6:{lead:"Careful!",teach:"A quarter of an HOUR is 15 minutes, not 25. 60 ÷ 4 = 15."},
+ M7:{lead:"Let's make time move!",teach:"Start at the first time, then count forward the minutes. Watch the minute hand step around the clock."},
+ M8:{lead:"Almost — watch the hour!",teach:"When the minutes pass 60, a new hour begins. After :60 we don't write :70 — we roll over and the hour goes up by 1."},
+ M9:{lead:"Great start — one step at a time!",teach:"Do the hours first, then the minutes. Move the hour hand forward, THEN count the extra minutes."},
 };
 const SKILLS=[
  {key:'hour-on-hour',name:"O'clock times",prereq:[],hard:false,pinit:.30},
@@ -141,6 +150,9 @@ const SKILLS=[
  {key:'daily-schedule',name:"Daily schedule times",prereq:['quarter-hours','near-next-hour'],hard:false,pinit:.15,phase3:true},
  {key:'am-pm',name:"Morning or night (AM/PM)",prereq:['daily-schedule'],hard:false,pinit:.15,phase3:true},
  {key:'match-activity',name:"Match the activity",prereq:['daily-schedule'],hard:false,pinit:.15,phase3:true},
+ {key:'elapsed-within',name:"Time later (same hour)",prereq:['match-activity'],hard:false,pinit:.12,phase4:true},
+ {key:'elapsed-cross',name:"Time later (past the hour)",prereq:['elapsed-within'],hard:true,pinit:.08,phase4:true},
+ {key:'elapsed-multi',name:"Hours and minutes later",prereq:['elapsed-cross'],hard:true,pinit:.08,phase4:true},
 ];
 const fmt=(h,m)=>`${h}:${String(m).padStart(2,'0')}`;
 const nh=h=>h===12?1:h+1;
@@ -174,6 +186,33 @@ function buildItems(){
  addText('match-activity','core',8,0,"The clock says 8:00 in the morning. What are you most likely doing?","Going to school","Sleeping at night,Eating dinner".split(","),{context:"🕗 It's 8:00 AM",emoji:"🕗"});
  addText('match-activity','core',6,30,"It's 6:30 in the evening. What fits best?","Eating dinner","Waking up,Recess at school".split(","),{context:"🕡 It's 6:30 PM",emoji:"🍽️"});
  addText('match-activity','core',3,0,"It's 3:00 in the afternoon. What fits best?","School is ending","Eating breakfast,Sleeping".split(","),{context:"🕒 It's 3:00 PM",emoji:"🎒"});
+ // --- Phase 4: elapsed time (two clocks: start -> ?) ---
+ const addElapsed=(skill,t,sh,sm,addMin,ds,extra={})=>{
+   let tot=sh*60+sm+addMin; tot=((tot-60)%720+720)%720+60; // wrap into 1..12h clock space
+   let eh=Math.floor(tot/60)%12; if(eh===0)eh=12; let em=tot%60;
+   const correct=fmt(eh,em);
+   const opts=[{v:correct,c:true,mis:null}];const seen=new Set([correct]);
+   ds.forEach(([v,mis])=>{if(!seen.has(v)){seen.add(v);opts.push({v,c:false,mis});}});
+   I.push({id:id++,skill,tier:t,h:sh,m:sm,prompt:extra.prompt,correct,opts,
+     elapsed:{addMin,eh,em},context:extra.context||null,emoji:extra.emoji||null});};
+ // M7: within the hour, no rollover. distractor = start unchanged (time didn't move)
+ [[3,10,20],[8,5,25],[1,15,30],[10,20,15]].forEach(([h,m,a])=>
+   addElapsed('elapsed-within','core',h,m,a,
+     [[fmt(h,m),'M7'],[fmt(h,m+a-5),null],[fmt(h,(m+a+5)%60),null]],
+     {prompt:`What time will it be ${a} minutes later?`,context:`⏩ Start at ${fmt(h,m)} — ${a} minutes pass`}));
+ // M8: crossing the hour. distractor = the ":70" non-rollover error
+ [[3,40,30],[5,50,20],[8,45,25],[11,55,15]].forEach(([h,m,a])=>{
+   const bad=fmt(h,m+a); // e.g. 3:70 — illegal, the classic M8 bug
+   addElapsed('elapsed-cross','hard',h,m,a,
+     [[bad,'M8'],[fmt(h,(m+a)%60),'M8'],[fmt(h,m),'M7']],
+     {prompt:`What time will it be ${a} minutes later?`,context:`⏩ Start at ${fmt(h,m)} — ${a} minutes pass`});});
+ // M9: multi-step (hours + minutes). distractor = added hours only, dropped minutes
+ [[2,20,1,30],[4,15,2,20],[7,10,1,45]].forEach(([h,m,ah,am])=>{
+   const addMin=ah*60+am;
+   addElapsed('elapsed-multi','hard',h,m,addMin,
+     [[fmt((h+ah-1)%12+1,m),'M9'],[fmt(h,(m+am)%60),'M9'],[fmt(h,m),'M7']],
+     {prompt:`What time will it be ${ah} hour${ah>1?'s':''} ${am} minutes later?`,
+      context:`⏩ Start at ${fmt(h,m)} — ${ah}h ${am}m pass`});});
  return I;
 }
 const ITEMS=buildItems();
@@ -214,10 +253,10 @@ function selectNext(){
   if(!pool.length)pool=ITEMS.filter(i=>i.skill===best);
   return pool[Math.floor(Math.random()*pool.length)];
 }
-function govMis(key){return{'hour-on-hour':['M2','M5'],'half-hour':['M1','M5'],'five-min':['M3','M4'],'current-hour':['M1','M5'],'near-next-hour':['M1','M5'],'quarter-hours':['M6'],'daily-schedule':['M1','M6'],'am-pm':[],'match-activity':[]}[key]||[];}
+function govMis(key){return{'hour-on-hour':['M2','M5'],'half-hour':['M1','M5'],'five-min':['M3','M4'],'current-hour':['M1','M5'],'near-next-hour':['M1','M5'],'quarter-hours':['M6'],'daily-schedule':['M1','M6'],'am-pm':[],'match-activity':[],'elapsed-within':['M7'],'elapsed-cross':['M8','M7'],'elapsed-multi':['M9','M8']}[key]||[];}
 
 /* ---------------- clock renderer ---------------- */
-function clockSVG(h,m,size=250){
+function clockSVG(h,m,size=250,hideHands=false){
   const c=size/2,r=c-8;
   const ma=(m/60)*360, ha=((h%12)/12)*360+(m/60)*30;
   const hand=(deg,len)=>{const a=(deg-90)*Math.PI/180;return[c+len*Math.cos(a),c+len*Math.sin(a)];};
@@ -228,16 +267,54 @@ function clockSVG(h,m,size=250){
   let nums='';
   for(let n=1;n<=12;n++){const a=(n*30-90)*Math.PI/180,nr=r-34;
     nums+=`<text x="${c+nr*Math.cos(a)}" y="${c+nr*Math.sin(a)}" text-anchor="middle" dominant-baseline="central" font-size="${size*0.1}" font-weight="700" fill="var(--clock-numeral)" font-family="var(--font-display)">${n}</text>`;}
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="Clock showing ${fmt(h,m)}">
+  const hands=hideHands
+    ? `<text x="${c}" y="${c}" text-anchor="middle" dominant-baseline="central" font-size="${size*0.32}" font-weight="700" fill="var(--accent2)" font-family="var(--font-display)">?</text>`
+    : `<line x1="${c}" y1="${c}" x2="${mx}" y2="${my}" stroke="var(--minute-hand)" stroke-width="5" stroke-linecap="round"/>
+       <line x1="${c}" y1="${c}" x2="${hx}" y2="${hy}" stroke="var(--hour-hand)" stroke-width="9" stroke-linecap="round"/>
+       <circle cx="${c}" cy="${c}" r="9" fill="var(--clock-hub)"/>`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="${hideHands?'Clock with unknown time':'Clock showing '+fmt(h,m)}">
     <circle cx="${c}" cy="${c}" r="${r}" fill="var(--clock-face)" stroke="var(--clock-ring)" stroke-width="6"/>
-    ${ticks}${nums}
-    <line x1="${c}" y1="${c}" x2="${mx}" y2="${my}" stroke="var(--minute-hand)" stroke-width="5" stroke-linecap="round"/>
-    <line x1="${c}" y1="${c}" x2="${hx}" y2="${hy}" stroke="var(--hour-hand)" stroke-width="9" stroke-linecap="round"/>
-    <circle cx="${c}" cy="${c}" r="9" fill="var(--clock-hub)"/></svg>`;
+    ${ticks}${nums}${hands}</svg>`;
 }
 
 /* ---------------- render ---------------- */
 const app=document.getElementById('app');
+
+/* animate a clock sweeping from start time forward by addMin, into element #id.
+   Drives the minute hand smoothly; the hour hand follows proportionally; a
+   readout counts the time so the child SEES time passing. Calls done() at end. */
+function animateSweep(elId, sh, sm, addMin, done){
+  const host=document.getElementById(elId); if(!host)return done&&done();
+  const size=170, c=size/2, r=c-8;
+  const startTotal=sh*60+sm;
+  const steps=Math.max(addMin,1);
+  const durPer=Math.min(900/steps, 60); // total sweep ~<=0.9s, capped per step
+  // static face
+  let ticks='',nums='';
+  for(let i=0;i<60;i++){const a=(i*6-90)*Math.PI/180,big=i%5===0,inn=r-(big?14:7);
+    ticks+=`<line x1="${c+inn*Math.cos(a)}" y1="${c+inn*Math.sin(a)}" x2="${c+r*Math.cos(a)}" y2="${c+r*Math.sin(a)}" stroke="${big?'var(--clock-tick)':'var(--clock-tick-minor)'}" stroke-width="${big?2.5:1.2}" stroke-linecap="round"/>`;}
+  for(let n=1;n<=12;n++){const a=(n*30-90)*Math.PI/180,nr=r-24;
+    nums+=`<text x="${c+nr*Math.cos(a)}" y="${c+nr*Math.sin(a)}" text-anchor="middle" dominant-baseline="central" font-size="${size*0.1}" font-weight="700" fill="var(--clock-numeral)" font-family="var(--font-display)">${n}</text>`;}
+  host.innerHTML=`<div class="cklabel" style="color:var(--accent2)">Watch time move ⏩</div>
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <circle cx="${c}" cy="${c}" r="${r}" fill="var(--clock-face)" stroke="var(--clock-ring)" stroke-width="5"/>
+      ${ticks}${nums}
+      <line id="${elId}-mh" stroke="var(--minute-hand)" stroke-width="4.5" stroke-linecap="round"/>
+      <line id="${elId}-hh" stroke="var(--hour-hand)" stroke-width="8" stroke-linecap="round"/>
+      <circle cx="${c}" cy="${c}" r="7" fill="var(--clock-hub)"/>
+    </svg>
+    <div class="cktime" id="${elId}-read"></div>`;
+  const mh=document.getElementById(elId+'-mh'),hh=document.getElementById(elId+'-hh'),read=document.getElementById(elId+'-read');
+  const setHand=(el,deg,len)=>{const a=(deg-90)*Math.PI/180;el.setAttribute('x1',c);el.setAttribute('y1',c);el.setAttribute('x2',c+len*Math.cos(a));el.setAttribute('y2',c+len*Math.sin(a));};
+  let cur=0;
+  const draw=(t)=>{const tot=startTotal+t;const m=((tot%60)+60)%60,h=(Math.floor(tot/60)%12);
+    setHand(mh,(m/60)*360,r*0.78);setHand(hh,((h%12)/12)*360+(m/60)*30,r*0.5);
+    let dh=Math.floor(tot/60)%12; if(dh===0)dh=12; read.textContent=fmt(dh,m);};
+  draw(0);
+  const tick=()=>{cur++;draw(cur);if(cur%5===0)SFX.star();if(cur<steps){setTimeout(tick,durPer);}else{read.style.color='var(--good)';read.style.fontSize='22px';SFX.correct();done&&done();}};
+  setTimeout(tick,300);
+}
+
 function setTheme(){document.body.className=S.theme==='ocean'?'':'theme-'+S.theme;}
 function confetti(){const ems=['⭐','🎉','✨','🌟'];for(let i=0;i<24;i++){const d=document.createElement('div');d.className='confetti';d.textContent=ems[i%4];d.style.left=Math.random()*100+'vw';d.style.animationDelay=(Math.random()*.4)+'s';document.body.appendChild(d);setTimeout(()=>d.remove(),2000);}}
 
@@ -295,7 +372,13 @@ function renderPlay(){
    <div class="card">
      ${it.context?`<div class="context">${it.context}</div>`:''}
      <div class="prompt">${it.prompt}</div>
-     ${it.noClock?'':`<div class="clockwrap">${clockSVG(it.h,it.m)}</div>`}
+     ${it.elapsed
+        ? `<div class="dualclock">
+             <div class="miniclock"><div class="cklabel">Start</div>${clockSVG(it.h,it.m,150)}<div class="cktime">${fmt(it.h,it.m)}</div></div>
+             <div class="ckarrow">⏩</div>
+             <div class="miniclock"><div class="cklabel">Later</div>${clockSVG(it.elapsed.eh,it.elapsed.em,150,true)}<div class="cktime" style="color:var(--accent2)">?</div></div>
+           </div>`
+        : (it.noClock?'':`<div class="clockwrap">${clockSVG(it.h,it.m)}</div>`)}
      <div class="opts ${wide?'opts-wide':''}" id="opts">
        ${it.opts.map((o,i)=>`<button class="opt" data-i="${i}">${o.v}</button>`).join('')}
      </div>
@@ -367,16 +450,23 @@ function answer(i){
       ? `You mastered "${SKILLS.find(s=>s.key===it.skill).name}"! +3 bonus stars to adopt animals.`
       : `That's ${it.correct}. +${earned} ⭐${streakMsg}`;
     fb.innerHTML=`<div class="teach" style="background:#eafaf1;border-color:var(--good);">
-      <span class="lead" style="color:var(--good);">${lead}</span>${body}</div>
+      <span class="lead" style="color:var(--good);">${lead}</span>${body}
+      ${it.elapsed?`<div class="sweepbox" id="sweepbox"></div>`:''}</div>
       <button class="btn" id="next">Next →</button>`;
+    if(it.elapsed)animateSweep('sweepbox', it.h, it.m, it.elapsed.addMin);
   }else{
     SFX.wrong();
     const ans = it.noClock?`The answer is "${it.correct}".`:('The correct time is '+it.correct+'. Look at the short hour hand and the long minute hand.');
     fb.innerHTML=`<div class="teach">
       <span class="lead">🐊 ${teach?teach.lead:'Almost — look with me!'}</span>
       ${teach?teach.teach:ans}
+      ${it.elapsed?`<div class="sweepbox" id="sweepbox"></div>`:''}
       </div>
       <button class="btn" id="retry">Try again →</button>`;
+    if(it.elapsed){
+      // replace the static "?" Later clock with a live sweep, AND show one in the teach box
+      animateSweep('sweepbox', it.h, it.m, it.elapsed.addMin);
+    }
   }
   S.sessionCount++;
   const nb=document.getElementById('next')||document.getElementById('retry');
