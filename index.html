@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Alli's Time Tails</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='32' fill='%232a9fd6'/%3E%3Cellipse cx='32' cy='40' rx='20' ry='12' fill='%233aa66a'/%3E%3Cellipse cx='32' cy='44' rx='14' ry='6' fill='%23a7d676'/%3E%3Ccircle cx='24' cy='26' r='8' fill='%233aa66a'/%3E%3Ccircle cx='40' cy='26' r='8' fill='%233aa66a'/%3E%3Ccircle cx='24' cy='25' r='4' fill='%23fff'/%3E%3Ccircle cx='40' cy='25' r='4' fill='%23fff'/%3E%3Ccircle cx='24' cy='26' r='2' fill='%230c2d44'/%3E%3Ccircle cx='40' cy='26' r='2' fill='%230c2d44'/%3E%3Cpath d='M20 42 q12 6 24 0' stroke='%230c2d44' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3Cpath d='M22 47 l2-3 2 3 2-3 2 3 2-3 2 3 2-3 2 3' stroke='%23fff' stroke-width='1.5' fill='none'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -73,6 +74,12 @@
   .confetti{position:fixed;top:-10px;font-size:22px;animation:fall 1.6s linear forwards;pointer-events:none;z-index:50;}
   @keyframes fall{to{transform:translateY(105vh) rotate(360deg);opacity:.2;}}
   .muted{color:var(--muted);font-size:14px;}
+  .context{text-align:center;font-size:15px;font-weight:700;color:var(--bg2);background:#eaf6ff;border-radius:14px;padding:8px 12px;margin-bottom:6px;}
+  .muteBtn{background:rgba(255,255,255,.16);border:none;border-radius:999px;width:42px;height:42px;font-size:18px;cursor:pointer;backdrop-filter:blur(6px);}
+  .stars.pop,#starbox.pop{animation:starpop .4s ease;}
+  @keyframes starpop{0%{transform:scale(1)}40%{transform:scale(1.25)}100%{transform:scale(1)}}
+  .opts-wide{grid-template-columns:1fr;}
+  .opts-wide .opt{font-size:19px;padding:18px;min-height:auto;}
   .h-row{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:14px;}
   .swatch{width:30px;height:30px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #e6eef4;cursor:pointer;}
 </style>
@@ -93,6 +100,27 @@ function bkt(p,correct,prm){
 function tier(p){return p<0.4?'easy':p<0.8?'core':'hard';}
 function mastered(p,hardOk){return p>=MASTERY && hardOk;}
 
+/* ---------------- sound engine (Web Audio, no files) ---------------- */
+let AC=null, MUTED=false;
+function ac(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}return AC;}
+function tone(freq,dur,type='sine',vol=0.18,delay=0){
+  if(MUTED)return;const a=ac();if(!a)return;
+  const t=a.currentTime+delay;
+  const o=a.createOscillator(),g=a.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vol,t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+dur);
+}
+const SFX={
+  correct(){tone(523,0.12,'sine',0.16);tone(784,0.18,'sine',0.16,0.1);},
+  star(){tone(880,0.08,'triangle',0.14);tone(1318,0.14,'triangle',0.14,0.07);},
+  wrong(){tone(311,0.18,'sine',0.12);tone(247,0.22,'sine',0.12,0.12);},
+  mastery(){[523,659,784,1046].forEach((f,i)=>tone(f,0.22,'triangle',0.16,i*0.11));},
+  adopt(){[659,784,988,1318].forEach((f,i)=>tone(f,0.18,'sine',0.15,i*0.08));},
+  tap(){tone(660,0.05,'square',0.06);},
+};
+
 /* ---------------- content (mirrors backend/app/content.py) ---------------- */
 const PRM={slip:0.10,guess:0.20,transit:0.17};
 const MIS={
@@ -110,20 +138,42 @@ const SKILLS=[
  {key:'current-hour',name:"Current hour",prereq:['half-hour'],hard:false,pinit:.15},
  {key:'near-next-hour',name:"Near the next hour",prereq:['current-hour'],hard:true,pinit:.10},
  {key:'quarter-hours',name:"Quarter past & to",prereq:['five-min','half-hour'],hard:false,pinit:.12},
+ {key:'daily-schedule',name:"Daily schedule times",prereq:['quarter-hours','near-next-hour'],hard:false,pinit:.15,phase3:true},
+ {key:'am-pm',name:"Morning or night (AM/PM)",prereq:['daily-schedule'],hard:false,pinit:.15,phase3:true},
+ {key:'match-activity',name:"Match the activity",prereq:['daily-schedule'],hard:false,pinit:.15,phase3:true},
 ];
 const fmt=(h,m)=>`${h}:${String(m).padStart(2,'0')}`;
 const nh=h=>h===12?1:h+1;
 function buildItems(){
  const I=[];let id=1;
- const add=(skill,t,h,m,prompt,ds)=>{const opts=[{v:fmt(h,m),c:true,mis:null}];const seen=new Set([fmt(h,m)]);
+ const add=(skill,t,h,m,prompt,ds,extra={})=>{const opts=[{v:fmt(h,m),c:true,mis:null}];const seen=new Set([fmt(h,m)]);
    ds.forEach(([v,mis])=>{if(!seen.has(v)){seen.add(v);opts.push({v,c:false,mis});}});
-   I.push({id:id++,skill,tier:t,h,m,prompt,correct:fmt(h,m),opts});};
+   I.push({id:id++,skill,tier:t,h,m,prompt,correct:fmt(h,m),opts,context:extra.context||null,noClock:!!extra.noClock,emoji:extra.emoji||null});};
+ // generic add for word-answer items (options are plain text, not times)
+ const addText=(skill,t,h,m,prompt,correctText,wrongTexts,extra={})=>{const opts=[{v:correctText,c:true,mis:null}];
+   wrongTexts.forEach(w=>opts.push({v:w,c:false,mis:null}));
+   I.push({id:id++,skill,tier:t,h,m,prompt,correct:correctText,opts,context:extra.context||null,noClock:!!extra.noClock,emoji:extra.emoji||null});};
  [1,4,7,10,2,5,8,11].forEach(h=>add('hour-on-hour','easy',h,0,"What time is it?",[[fmt(nh(h),0),'M1'],[fmt(12,(h*5)%60),'M2'],[fmt(h,30),null]]));
  [1,3,6,8,10,12].forEach(h=>add('half-hour','core',h,30,"What time is it?",[[fmt(nh(h),30),'M1'],[fmt(h,0),null],[fmt(h,6),'M4']]));
  [[3,20],[7,25],[10,40],[2,10],[5,35],[8,50]].forEach(([h,m])=>add('five-min','core',h,m,"What time is it?",[[fmt(Math.floor(m/5),m),'M3'],[fmt(h,Math.floor(m/5)),'M4'],[fmt(h,(m+5)%60),null]]));
  [[2,25],[5,15],[8,45],[11,20]].forEach(([h,m])=>add('current-hour','core',h,m,"What time is it?",[[fmt(nh(h),m),'M1'],[fmt(h,Math.floor(m/5)),'M4'],[fmt(12,m),'M2']]));
  [[6,55],[3,50],[9,55],[1,50],[4,55],[7,50]].forEach(([h,m])=>add('near-next-hour','hard',h,m,"Look closely at the hour hand. What time is it?",[[fmt(nh(h),m),'M1'],[fmt(nh(h),0),'M5'],[fmt(h,Math.floor(m/5)),'M4']]));
  [[3,15],[8,45],[5,15],[11,45]].forEach(([h,m])=>add('quarter-hours','core',h,m,"What time is shown?",[[fmt(h,25),'M6'],[fmt(h,30),null],[fmt(nh(h),m),'M1']]));
+ // --- Phase 3: real-life time (clock shown, real-world framing) ---
+ add('daily-schedule','core',8,0,"School starts. What time is it?",[[fmt(9,0),'M1'],[fmt(12,40),'M2'],[fmt(8,30),null]],{context:"🏫 The school bell rings!",emoji:"🏫"});
+ add('daily-schedule','core',12,30,"It's lunchtime! What time is it?",[[fmt(1,30),'M1'],[fmt(12,6),'M4'],[fmt(12,0),null]],{context:"🍎 Time for lunch",emoji:"🍎"});
+ add('daily-schedule','core',3,15,"Soccer practice begins. What time?",[[fmt(3,25),'M6'],[fmt(4,15),'M1'],[fmt(3,30),null]],{context:"⚽ Soccer practice",emoji:"⚽"});
+ add('daily-schedule','core',7,45,"Bedtime story time. What time?",[[fmt(7,25),'M6'],[fmt(8,45),'M1'],[fmt(8,0),null]],{context:"📖 Bedtime story",emoji:"📖"});
+ add('daily-schedule','core',10,20,"Snack break at school. What time?",[[fmt(10,4),'M4'],[fmt(11,20),'M1'],[fmt(4,20),'M3']],{context:"🥨 Snack time",emoji:"🥨"});
+ // --- Phase 3: AM / PM (text answers) ---
+ addText('am-pm','core',7,0,"You eat breakfast at 7:00. Is that morning or night?","Morning (AM)",["Night (PM)"],{context:"🥞 Breakfast time!",emoji:"🥞",noClock:false});
+ addText('am-pm','core',8,30,"You brush your teeth before bed at 8:30. Morning or night?","Night (PM)",["Morning (AM)"],{context:"🌙 Before bed",emoji:"🌙"});
+ addText('am-pm','core',12,0,"The sun is highest and it's lunchtime. Is 12:00 noon or midnight?","Noon (PM)",["Midnight (AM)"],{context:"☀️ Sun overhead",emoji:"☀️"});
+ addText('am-pm','core',6,0,"Birds start singing as the sun rises at 6:00. Morning or night?","Morning (AM)",["Night (PM)"],{context:"🐦 Sunrise",emoji:"🐦"});
+ // --- Phase 3: match the activity (no clock; read time, pick activity) ---
+ addText('match-activity','core',8,0,"The clock says 8:00 in the morning. What are you most likely doing?","Going to school","Sleeping at night,Eating dinner".split(","),{context:"🕗 It's 8:00 AM",emoji:"🕗"});
+ addText('match-activity','core',6,30,"It's 6:30 in the evening. What fits best?","Eating dinner","Waking up,Recess at school".split(","),{context:"🕡 It's 6:30 PM",emoji:"🍽️"});
+ addText('match-activity','core',3,0,"It's 3:00 in the afternoon. What fits best?","School is ending","Eating breakfast,Sleeping".split(","),{context:"🕒 It's 3:00 PM",emoji:"🎒"});
  return I;
 }
 const ITEMS=buildItems();
@@ -139,7 +189,7 @@ const ANIMALS=[
 /* ---------------- state ---------------- */
 const S={
   screen:'onboard', theme:'ocean', sanctuary:'', starter:'puppy',
-  stars:0, adopted:[], sessionCount:0, timeMs:0,
+  stars:0, adopted:[], sessionCount:0, timeMs:0, streak:0,
   skill:{}, // key -> {p,hardOk,mastered}
   misc:{},  // mid -> {hits,open}
   recent:[], current:null, answered:null, startTs:0,
@@ -164,7 +214,7 @@ function selectNext(){
   if(!pool.length)pool=ITEMS.filter(i=>i.skill===best);
   return pool[Math.floor(Math.random()*pool.length)];
 }
-function govMis(key){return{'hour-on-hour':['M2','M5'],'half-hour':['M1','M5'],'five-min':['M3','M4'],'current-hour':['M1','M5'],'near-next-hour':['M1','M5'],'quarter-hours':['M6']}[key]||[];}
+function govMis(key){return{'hour-on-hour':['M2','M5'],'half-hour':['M1','M5'],'five-min':['M3','M4'],'current-hour':['M1','M5'],'near-next-hour':['M1','M5'],'quarter-hours':['M6'],'daily-schedule':['M1','M6'],'am-pm':[],'match-activity':[]}[key]||[];}
 
 /* ---------------- clock renderer ---------------- */
 function clockSVG(h,m,size=250){
@@ -233,20 +283,35 @@ function nextQuestion(){
 
 function renderPlay(){
   const it=S.current;
+  const wide=it.opts.some(o=>o.v.length>6); // text answers need full-width buttons
   app.innerHTML=`
    <div class="topbar">
      <div style="font-family:var(--font-display);font-weight:600;font-size:18px;">${S.sanctuary}</div>
-     <div class="stars">⭐ ${S.stars}</div>
+     <div style="display:flex;gap:8px;align-items:center;">
+       <button class="muteBtn" id="mute" aria-label="sound">${MUTED?'🔇':'🔊'}</button>
+       <div class="stars" id="starbox">⭐ <span id="starnum">${S.stars}</span></div>
+     </div>
    </div>
    <div class="card">
+     ${it.context?`<div class="context">${it.context}</div>`:''}
      <div class="prompt">${it.prompt}</div>
-     <div class="clockwrap">${clockSVG(it.h,it.m)}</div>
-     <div class="opts" id="opts">
+     ${it.noClock?'':`<div class="clockwrap">${clockSVG(it.h,it.m)}</div>`}
+     <div class="opts ${wide?'opts-wide':''}" id="opts">
        ${it.opts.map((o,i)=>`<button class="opt" data-i="${i}">${o.v}</button>`).join('')}
      </div>
      <div id="fb"></div>
    </div>`;
-  app.querySelectorAll('.opt').forEach(b=>b.onclick=()=>answer(parseInt(b.dataset.i)));
+  app.querySelectorAll('.opt').forEach(b=>b.onclick=()=>{SFX.tap();answer(parseInt(b.dataset.i));});
+  document.getElementById('mute').onclick=()=>{MUTED=!MUTED;if(!MUTED){ac();SFX.tap();}render();};
+}
+
+function bumpStars(to){
+  const el=document.getElementById('starnum'),box=document.getElementById('starbox');
+  if(!el){return;}
+  box.classList.add('pop');setTimeout(()=>box&&box.classList.remove('pop'),400);
+  let cur=parseInt(el.textContent)||0;
+  const step=()=>{if(cur<to){cur++;el.textContent=cur;SFX.star();if(cur<to)setTimeout(step,140);}};
+  step();
 }
 
 function answer(i){
@@ -259,19 +324,27 @@ function answer(i){
   st.p=bkt(st.p,correct,prm);
   if(correct&&it.tier==='hard')st.hardOk=true;
   const gateOk=st.hardOk||!SKILLS.find(s=>s.key===it.skill).hard;
-  let justMastered=false;
-  if(mastered(st.p,gateOk)&&!st.mastered){st.mastered=true;justMastered=true;S.stars+=3;}
+
+  // per-question stars: +1, or +2 for a hard item; mastery adds a bonus
+  let earned=0, justMastered=false;
+  if(correct){
+    earned = it.tier==='hard'?2:1;
+    S.streak=(S.streak||0)+1;
+    if(mastered(st.p,gateOk)&&!st.mastered){st.mastered=true;justMastered=true;earned+=3;}
+  }else{
+    S.streak=0;
+  }
+  S.stars+=earned;
   S.recent=[it.skill,...S.recent].slice(0,2);
   S.timeMs+=rt;
 
-  // misconception tracking (skip fast-after-streak slips)
+  // misconception tracking (skip if it was a text answer with no mis)
   let teach=null;
   if(!correct&&opt.mis){
     const m=S.misc[opt.mis]||{hits:0,open:false};
     m.hits++;if(m.hits>=2)m.open=true;S.misc[opt.mis]=m;
     teach=MIS[opt.mis];
   }
-  // resolve: a correct hard answer closes related open misconceptions
   if(correct&&it.tier==='hard')govMis(it.skill).forEach(mid=>{if(S.misc[mid])S.misc[mid].open=false;});
 
   // paint buttons
@@ -282,27 +355,38 @@ function answer(i){
     else b.classList.add('dim');
     b.disabled=true;
   });
+
   const fb=document.getElementById('fb');
   if(correct){
-    if(justMastered)confetti();
+    if(justMastered){SFX.mastery();confetti();} else {SFX.correct();}
+    if(earned>0)setTimeout(()=>bumpStars(S.stars),200);
+    const streakMsg = S.streak>=3?` 🔥 ${S.streak} in a row!`:'';
+    const lead = justMastered?'🌟 Skill mastered!'
+               : pick(['🐊 Yes!','🐊 You got it!','🐊 Nice work!','🐊 Snappy!']);
+    const body = justMastered
+      ? `You mastered "${SKILLS.find(s=>s.key===it.skill).name}"! +3 bonus stars to adopt animals.`
+      : `That's ${it.correct}. +${earned} ⭐${streakMsg}`;
     fb.innerHTML=`<div class="teach" style="background:#eafaf1;border-color:var(--good);">
-      <span class="lead" style="color:var(--good);">${justMastered?'🌟 Skill mastered! +3 stars':'Yes! '+it.correct}</span>
-      ${justMastered?'You earned stars to adopt an animal!':'Nice reading.'}</div>
+      <span class="lead" style="color:var(--good);">${lead}</span>${body}</div>
       <button class="btn" id="next">Next →</button>`;
   }else{
+    SFX.wrong();
+    const ans = it.noClock?`The answer is "${it.correct}".`:('The correct time is '+it.correct+'. Look at the short hour hand and the long minute hand.');
     fb.innerHTML=`<div class="teach">
-      <span class="lead">🐊 ${teach?teach.lead:'Almost!'}</span>
-      ${teach?teach.teach:'The correct time is '+it.correct+'. Look at the short hour hand and the long minute hand.'}
+      <span class="lead">🐊 ${teach?teach.lead:'Almost — look with me!'}</span>
+      ${teach?teach.teach:ans}
       </div>
       <button class="btn" id="retry">Try again →</button>`;
   }
   S.sessionCount++;
   const nb=document.getElementById('next')||document.getElementById('retry');
   nb.onclick=()=>{
+    SFX.tap();
     if(S.sessionCount>=8){S.screen='home';render();}
     else nextQuestion();
   };
 }
+function pick(arr){return arr[Math.floor(Math.random()*arr.length)];}
 
 function renderHome(){
   S.sessionCount=0;
@@ -328,7 +412,7 @@ function renderHome(){
   app.querySelector('#play').onclick=()=>{S.sessionCount=0;nextQuestion();};
   app.querySelectorAll('[data-adopt]').forEach(el=>el.onclick=()=>{
     const a=ANIMALS.find(x=>x.k===el.dataset.adopt);
-    if(S.stars>=a.cost){S.stars-=a.cost;S.adopted.push(a.k);confetti();render();}
+    if(S.stars>=a.cost){S.stars-=a.cost;S.adopted.push(a.k);SFX.adopt();confetti();render();}
   });
 }
 
